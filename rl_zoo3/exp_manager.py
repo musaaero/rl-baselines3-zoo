@@ -61,7 +61,30 @@ from rl_zoo3.utils import (
     get_wrapper_class,
 )
 
+def deep_update(original: dict, update: dict) -> dict:
+    """
+    Recursively merge ``update`` into ``original`` and return the merged dict.
 
+    Unlike ``dict.update()``, nested dictionaries are merged key-by-key instead of
+    being replaced wholesale, so sampled nested hyperparameters (e.g. ``policy_kwargs``)
+    no longer drop user-specified sibling keys (see issue #431).
+
+    The inputs are not mutated: ``original`` is deep-copied first, which also prevents
+    sampled values from leaking into ``self._hyperparams`` across optimization trials
+    (the previous code used a shallow ``dict.copy()`` that shared nested dicts).
+    """
+    merged = copy.deepcopy(original)
+    _deep_update(merged, update)
+    return merged
+
+
+def _deep_update(target: dict, update: dict) -> None:
+    for key, value in update.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            _deep_update(target[key], value)
+        else:
+            target[key] = value
+            
 class ExperimentManager:
     """
     Experiment manager: read the hyperparameters,
@@ -813,7 +836,7 @@ class ExperimentManager:
         # Pass n_actions to initialize DDPG/TD3 noise sampler
         # Sample candidate hyperparameters
         sampled_hyperparams = HYPERPARAMS_SAMPLER[self.algo](trial, self.n_actions, n_envs, additional_args)
-        kwargs.update(sampled_hyperparams)
+        kwargs = deep_update(kwargs, sampled_hyperparams)
 
         env = self.create_envs(n_envs, no_log=True)
 
