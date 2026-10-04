@@ -6,6 +6,7 @@ import subprocess
 import optuna
 import pytest
 from optuna.trial import TrialState
+from rl_zoo3.exp_manager import deep_update
 
 
 def _assert_eq(left, right):
@@ -131,3 +132,44 @@ def test_multiple_workers(tmp_path):
 
     for worker in workers:
         assert worker.returncode == 0, "STDOUT:\n{}\nSTDERR:\n{}\n".format(*worker.communicate())
+
+
+
+def test_deep_update_merges_nested_dicts():
+    # Regression test for issue #431: sampled nested hyperparameters must merge
+    # into user-specified nested dicts instead of replacing them wholesale
+    base = {
+        "learning_rate": 3e-4,
+        "policy_kwargs": {
+            "features_extractor_class": "CustomFeatureExtractor",
+            "features_extractor_kwargs": {"features_dim": 10},
+        },
+    }
+    sampled = {
+        "policy_kwargs": {
+            "net_arch": {"pi": [64], "vf": [64]},
+            "activation_fn": "relu",
+        }
+    }
+
+    merged = deep_update(base, sampled)
+
+    # Sampled keys are applied
+    assert merged["policy_kwargs"]["net_arch"] == {"pi": [64], "vf": [64]}
+    assert merged["policy_kwargs"]["activation_fn"] == "relu"
+    # Sibling keys are NOT clobbered (the bug: dict.update() dropped them)
+    assert merged["policy_kwargs"]["features_extractor_class"] == "CustomFeatureExtractor"
+    assert merged["policy_kwargs"]["features_extractor_kwargs"]["features_dim"] == 10
+    # Flat keys behave like before
+    assert merged["learning_rate"] == 3e-4
+    # Inputs are not mutated (the old shallow copy leaked across trials)
+    assert "net_arch" not in base["policy_kwargs"]
+    assert "activation_fn" not in base["policy_kwargs"]
+
+
+def test_deep_update_replaces_non_dict_values():
+    # Merging only happens dict-into-dict; anything else replaces, like dict.update()
+    assert deep_update({"a": {"b": 1}}, {"a": 5}) == {"a": 5}
+    assert deep_update({"a": 1}, {"a": {"b": 2}}) == {"a": {"b": 2}}
+    assert deep_update({}, {"a": 1}) == {"a": 1}
+    assert deep_update({"a": 1}, {}) == {"a": 1}
